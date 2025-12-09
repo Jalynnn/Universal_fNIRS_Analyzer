@@ -72,27 +72,23 @@ end
 
 % remove collected participants (if any)
 if ~isempty(idx)
+    % Which ptps to remove - Those with less than 8 triggers
     namesToRemove = ptpNames(idx);
+
+    % Remove ptps from trigger struct
     trigs_by_ptp = rmfield(trigs_by_ptp, namesToRemove);
+
+    % Remove same ptps from raw
+    raw(idx) = [];
+
+    % Converts a table to a cell matrix
+    conditions = table2cell(conditions);
+    
+    % rms same ptps from conditions dataset
+    conditions(idx,:) = [];
 end
 
-% %% Remove particiants with insufficient timestamps across vars
-% a=1; idx = [];
-% for i = 1:length(data_trigs)
-%     [r c] = size(data_trigs{i});
-%     if r < 8
-%         idx(a) = i;
-%     end
-%     a=a+1;
-% end
-% idx(idx == 0) = [];
-% 
-% data_trigs(idx) = [];
-% raw(idx) = [];
-% conditions = table2cell(conditions);
-% conditions(idx,:) = [];
-
-% Convert condition codes to string labels
+%% Convert condition codes to string labels
 for i = 1:length(conditions)
     for j = 2:5
         if str2num(conditions{i,j}(2)) == 2
@@ -110,7 +106,7 @@ for i = 1:length(conditions)
     end
 end
 
-% Insert stimulus designs
+%% Insert stimulus designs
 a=1;
 for i = 1:length(raw)
     starts = data_trigs{i}(1:2:end);

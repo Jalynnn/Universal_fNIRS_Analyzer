@@ -72,16 +72,26 @@ end
 
 % remove collected participants (if any)
 if ~isempty(idx)
-    namesToRemove = ptpNames(idx);
-    trigs_by_ptp = rmfield(trigs_by_ptp, namesToRemove);
+    error(['Error: The following participants have fewer than 8 triggers: ' ...
+            num2str(idx)]);
+
+    % % Which ptps to remove - Those with less than 8 triggers
+    % namesToRemove = ptpNames(idx);
+    % 
+    % % Remove ptps from trigger struct
+    % trigs_by_ptp = rmfield(trigs_by_ptp, namesToRemove);
+    % 
+    % % Remove same ptps from raw
+    % raw(idx) = [];
+    % 
+    % % rms same ptps from conditions dataset
+    % conditions(idx,:) = [];
 end
 
-% data_trigs(idx) = [];
-% raw(idx) = [];
-% conditions = table2cell(conditions);
-% conditions(idx,:) = [];
-
 %% Convert condition codes to string labels
+% Converts a table to a cell matrix
+conditions = table2cell(conditions);
+
 for i = 1:length(conditions)
     for j = 2:5
         if str2num(conditions{i,j}(2)) == 2
