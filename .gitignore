@@ -47,3 +47,17 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Skip ptp data
+*.nirs
+*.snirf
+*.wl1
+*.wl2
+*.zip
+*.json
+*.hdr
+*.tri
+*.txt
+*.ndat
+*.mat
+*.acc
