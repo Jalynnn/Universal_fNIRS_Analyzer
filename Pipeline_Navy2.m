@@ -3,6 +3,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % This is the main analysis script for fNIRS neuroimaging data analysis.
 % 2024 - Institute of Cognitive Science, CU-Boulder - James Crum  
+% 2025 - Modifications Jalynn Nicoly
 
 %% Add NIRS Toolbox to the Matlab path
 clear, clc 
