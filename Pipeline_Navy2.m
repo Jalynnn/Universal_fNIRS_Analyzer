@@ -52,22 +52,36 @@ for i = 1:numel(triFiles)
 end
 
 %% Remove particiants with insufficient timestamps across vars
-a=1; idx = [];
-for i = 1:length(data_trigs)
-    [r c] = size(data_trigs{i});
+a = 1;
+idx = [];
+
+ptpNames = fieldnames(trigs_by_ptp);
+for i = 1:numel(ptpNames)
+    cellVal = trigs_by_ptp.(ptpNames{i});  % should be a 1x1 cell containing the vector
+    if ~iscell(cellVal) || isempty(cellVal) || isempty(cellVal{1})
+        r = 0;
+    else
+        r = size(cellVal{1},1);
+    end
+
     if r < 8
         idx(a) = i;
+        a = a + 1;
     end
-    a=a+1;
 end
-idx(idx == 0) = [];
 
-data_trigs(idx) = [];
-raw(idx) = [];
-conditions = table2cell(conditions);
-conditions(idx,:) = [];
+% remove collected participants (if any)
+if ~isempty(idx)
+    namesToRemove = ptpNames(idx);
+    trigs_by_ptp = rmfield(trigs_by_ptp, namesToRemove);
+end
 
-% Convert condition codes to string labels
+% data_trigs(idx) = [];
+% raw(idx) = [];
+% conditions = table2cell(conditions);
+% conditions(idx,:) = [];
+
+%% Convert condition codes to string labels
 for i = 1:length(conditions)
     for j = 2:5
         if str2num(conditions{i,j}(2)) == 2
@@ -85,7 +99,7 @@ for i = 1:length(conditions)
     end
 end
 
-% Insert stimulus designs
+%% Insert stimulus designs
 a=1;
 for i = 1:length(raw)
     starts = data_trigs{i}(1:2:end);
