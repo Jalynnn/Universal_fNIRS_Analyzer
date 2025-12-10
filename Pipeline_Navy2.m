@@ -64,7 +64,7 @@ for i = 1:numel(ptpNames)
         cellSize = size(cellVal{1},1);
     end
 
-    if cellSize < 8
+    if cellSize < 10
         idx(a) = i;
         a = a + 1;
     end
@@ -72,10 +72,10 @@ end
 
 % remove collected participants (if any)
 if ~isempty(idx)
-    error(['Error: The following participants have fewer than 8 triggers: ' ...
+    error(['Error: The following participants have fewer than 10 triggers: ' ...
             num2str(idx)]);
 
-    % % Which ptps to remove - Those with less than 8 triggers
+    % % Which ptps to remove - Those with less than 10 triggers
     % namesToRemove = ptpNames(idx);
     % 
     % % Remove ptps from trigger struct
@@ -138,7 +138,6 @@ for i = 1:numel(triFiles)
         tsColumn = string(tsColumn_Cell);
 
         % Truncate microseconds to milliseconds (LSL standard)
-        % Note: The strings should now be preserved, not NaN
         tsColumn = extractBefore(tsColumn, 24); % keeps yyyy-MM-ddTHH:mm:ss.SSS
 
         % Convert to datetime object
@@ -161,7 +160,6 @@ for i = 1:numel(triFiles)
 end
 
 %% Insert stimulus designs
-%% Insert stimulus designs
 nRaw = length(raw);
 % Create a cell array to store the full structure from trigs_by_ptp
 ptpNames = fieldnames(trigs_by_ptp);
@@ -183,105 +181,128 @@ for i = 1:nRaw
          % If it somehow retrieved a cell holding the struct (as a fallback)
          tempStruct = tempStruct{1};
     end
-    
+
     triTimesSec = tempStruct(1).Times;      % The relative time vector in seconds
     trigVec     = tempStruct(1).Triggers;   % The trigger code vector
-    
-    % Check for sufficient trigger points (must be >= 8: 4 starts, 4 ends)
-    if isempty(trigVec) || numel(trigVec) < 8 || isempty(triTimesSec)
+
+    % Check for sufficient trigger points (must be >= 10: 4 trials * 2 + 2 baselines * 1)
+    if isempty(trigVec) || numel(trigVec) < 10 || isempty(triTimesSec)
         exclude(a) = i; a = a+1; continue
     end
-    
+
     % Secondary Exclusion Check (Raw NIRS Data Integrity)
     if isempty(raw(i).time) || ~isnumeric(raw(i).time)
         exclude(a) = i; a = a+1; continue
     end
 
-    % 1. Extract Trial Onsets and Durations 
-    % Pair triggers: odd = start, even = end (Indices of triTimesSec)
-    starts = 1:2:length(trigVec);
-    ends   = 2:2:length(trigVec);
+    % 1. Separate Baseline Markers and Trial Triggers
     
+    % The baseline *end* markers are triggers 31 and 32
+    is_baseline_marker = (trigVec == 31) | (trigVec == 32); 
+    
+    % Baseline marker times (end of the 90s baseline period) and values
+    baseline_marker_times = triTimesSec(is_baseline_marker);
+    baseline_codes        = trigVec(is_baseline_marker);
+    
+    % Experimental trial trigger times and values
+    is_trial = ~is_baseline_marker;
+    trial_onsets_times = triTimesSec(is_trial);
+    trial_codes        = trigVec(is_trial);
+
+    % Sanity check: Should have 2 baseline markers and 8 trial triggers
+    if length(baseline_marker_times) ~= 2 || length(trial_onsets_times) ~= 8
+        warning('Participant %d: Expected 2 baseline and 8 trial triggers, found %d and %d.', ...
+            i, length(baseline_marker_times), length(trial_onsets_times));
+        exclude(a) = i; a = a+1; continue;
+    end
+    
+    % 2. Extract Trial Onsets and Durations 
+    % The experimental trials are still paired (odd = start, even = end)
+    starts = 1:2:length(trial_codes);
+    ends   = 2:2:length(trial_codes);
+
     % Onsets for the 4 experimental trials 
-    trial_onsets    = triTimesSec(starts);
-    trial_end_times = triTimesSec(ends); 
+    trial_onsets    = trial_onsets_times(starts);
+    trial_end_times = trial_onsets_times(ends); 
     trial_durations = trial_end_times - trial_onsets;
 
-    % 2. Define Condition Labels
+    % 3. Define Condition Labels
     % C1 is conditions{i,2} (e.g., 'LG'), C2 is conditions{i,3} (e.g., 'HG')
-    % Order: C1 Train (1), C1 Test (2), C2 Train (3), C2 Test (4)
     cond_name_1 = conditions{i,2};
     cond_name_2 = conditions{i,3};
-    
+
     % Use these base names to create the explicit stimulus names
     % Order: C1 Train, C1 Test, C2 Train, C2 Test
     base_names = { cond_name_1, cond_name_1, cond_name_2, cond_name_2 };
-    
+
     % Need 6 total events: 4 trials + 2 baselines
     newStims = cell(6,1); 
+
+    % 4. Calculate Baselines (90s BEFORE the marker) and Assign to Conditions
+
+    % Determine which name corresponds to which code for the baseline
+    if strcmp(cond_name_1, 'LG')
+        lg_cond_name = cond_name_1;
+        hg_cond_name = cond_name_2;
+    else 
+        lg_cond_name = cond_name_2;
+        hg_cond_name = cond_name_1;
+    end
     
-    % 3. Calculate Dynamic Baseline Durations
+    % Create the Baseline events structure
+    baseline_events = struct('names', {}, 'onsets', {}, 'durations', {}, 'amp', {}, 'regressor_no_interest', {});
     
-    % --- Baseline 1: Between Cond 1 Train (Trial 1) and Cond 1 Test (Trial 2) ---
-    baseline1_onset    = trial_end_times(1);     % Starts when Trial 1 ends
-    baseline1_end      = trial_onsets(2);        % Ends when Trial 2 starts
-    baseline1_duration = baseline1_end - baseline1_onset;
+    for k = 1:2
+        code = baseline_codes(k);
+        marker_time = baseline_marker_times(k);
+        
+        % CRUCIAL CHANGE: Baseline starts 90 seconds BEFORE the marker time
+        baseline_duration = 90;
+        baseline_onset = marker_time - baseline_duration; 
+        
+        if code == 31 % LG Condition Baseline
+            b_name = [lg_cond_name '_Baseline'];
+        elseif code == 32 % HG Condition Baseline
+            b_name = [hg_cond_name '_Baseline'];
+        else
+            error('Unexpected baseline code: %d', code);
+        end
+        
+        baseline_events(k).names     = b_name; 
+        baseline_events(k).onsets    = baseline_onset;
+        baseline_events(k).durations = baseline_duration; % Fixed 90s duration
+        baseline_events(k).amp       = 1;
+        baseline_events(k).regressor_no_interest = 0;
+    end
     
-    % --- Baseline 2: Between Cond 2 Train (Trial 3) and Cond 2 Test (Trial 4) ---
-    baseline2_onset    = trial_end_times(3);     % Starts when Trial 3 ends
-    baseline2_end      = trial_onsets(4);        % Ends when Trial 4 starts
-    baseline2_duration = baseline2_end - baseline2_onset;
-
-
-    % 4. Insert All 6 Stimulus Events in Order
+    % 5. Create Trial Events
+    trial_events = cell(4, 1);
+    for j = 1:4
+        if j==1 || j==3; label='Train'; else; label='Test'; end
+        trial_events{j}.names = [base_names{j} '_' label]; 
+        
+        trial_events{j}.onsets    = trial_onsets(j);
+        trial_events{j}.durations = trial_durations(j);
+        trial_events{j}.amp       = 1;
+        trial_events{j}.regressor_no_interest = 0;
+    end
     
-    % --- Event 1: Cond 1 Train ---
-    idx = 1;
-    newStims{idx}.names     = [base_names{1} '_Train']; % e.g., 'LG_Train'
-    newStims{idx}.onsets    = trial_onsets(1);
-    newStims{idx}.durations = trial_durations(1);
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
+    % 6. Combine and Sort All 6 Events Chronologically
 
-    % --- Event 2: Cond 1 Baseline ---
-    idx = 2;
-    newStims{idx}.names     = [base_names{1} '_Baseline']; % e.g., 'LG_Baseline'
-    newStims{idx}.onsets    = baseline1_onset;
-    newStims{idx}.durations = baseline1_duration;
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
+    % Convert the 1x2 baseline struct array into a 2x1 cell array of structs
+    baseline_events_cell = num2cell(baseline_events(:)); 
+    % Note: `(:)` forces it into a column vector first, then `num2cell` wraps each struct in a cell.
+    
+    % Combine the two column cell arrays (2 baseline events + 4 trial events = 6 events)
+    combined_events = [baseline_events_cell; trial_events]; % CORRECTED CONCATENATION
 
-    % --- Event 3: Cond 1 Test ---
-    idx = 3;
-    newStims{idx}.names     = [base_names{2} '_Test']; % e.g., 'LG_Test'
-    newStims{idx}.onsets    = trial_onsets(2);
-    newStims{idx}.durations = trial_durations(2);
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
+    % Extract all onsets from the combined events for sorting
+    all_onsets_temp = cellfun(@(x) x.onsets, combined_events);
 
-    % --- Event 4: Cond 2 Train ---
-    idx = 4;
-    newStims{idx}.names     = [base_names{3} '_Train']; % e.g., 'HG_Train'
-    newStims{idx}.onsets    = trial_onsets(3);
-    newStims{idx}.durations = trial_durations(3);
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
-
-    % --- Event 5: Cond 2 Baseline ---
-    idx = 5;
-    newStims{idx}.names     = [base_names{3} '_Baseline']; % e.g., 'HG_Baseline'
-    newStims{idx}.onsets    = baseline2_onset;
-    newStims{idx}.durations = baseline2_duration;
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
-
-    % --- Event 6: Cond 2 Test ---
-    idx = 6;
-    newStims{idx}.names     = [base_names{4} '_Test']; % e.g., 'HG_Test'
-    newStims{idx}.onsets    = trial_onsets(4);
-    newStims{idx}.durations = trial_durations(4);
-    newStims{idx}.amp       = 1;
-    newStims{idx}.regressor_no_interest = 0;
+    % Sort the combined events based on their onset time
+    [~, sorted_idx] = sort(all_onsets_temp);
+    
+    newStims = combined_events(sorted_idx);
 
     AllStims{i} = newStims;
 end
@@ -292,11 +313,11 @@ exclude = exclude(exclude > 0);
 if ~isempty(exclude)
     fprintf('--- DEBUG: exclusion details ---\n');
     for k = exclude
-         trig_status = ~isempty(data_trigs{k}(1).Triggers) && numel(data_trigs{k}(1).Triggers) >= 8;
+         trig_status = ~isempty(data_trigs{k}(1).Triggers) && numel(data_trigs{k}(1).Triggers) >= 10;
          time_status = ~isempty(raw(k).time) && isnumeric(raw(k).time);
-         
+
          if ~trig_status
-             msg = 'Reason: .tri file less than 8 triggers OR timestamp error.';
+             msg = 'Reason: .tri file less than 10 triggers OR timestamp error.';
          elseif ~time_status
              msg = 'Reason: raw(i).time is empty or not numeric.';
          else
@@ -308,67 +329,123 @@ if ~isempty(exclude)
 end
 
 %% Working with nirs R
-% r = nirs.core.Data;
-% for i = 1:length(raw)
-%     for j =1:4 % number of conditions
-%         s = nirs.design.StimulusEvents;
-%         s.name = AllStims{i}{j}.names;
-%         s.onset = AllStims{i}{j}.onsets;
-%         s.dur = AllStims{i}{j}.durations;
-%         s.amp = AllStims{i}{j}.amp;
-%         s.regressor_no_interest = AllStims{i}{j}.regressor_no_interest;
-%         r(i).stimulus(s.name) = s;
-%         % raw(i).stimulus(s.name) = s;
-%         clear s
-%     end
-%     r(i).description    = raw(i).description;
-%     r(i).data           = raw(i).data;
-%     r(i).probe          = raw(i).probe;
-%     r(i).time           = raw(i).time;
-%     r(i).Fm             = raw(i).Fm;
-%     r(i).auxillary      = raw(i).auxillary;
-%     r(i).demographics   = raw(i).demographics;
-% end
-% Stim_Table = nirs.createStimulusTable(r); % create table of stim designs across subjects
-% 
-% %% Specify short-seperation channels
-% for i = 1:length(r)
-%     probe = r(i).probe;
-%     probe.link.ShortSeperation = zeros(height(probe.link),1);
-%     for j = 1:length(probe.link.detector)
-%         if probe.link.detector(j) > 28
-%             probe.link.ShortSeperation(j) = 1;
-%         end
-%         r(i).probe = probe;
-%     end
-% end
-% 
-% %% Conversions
-% jobs         = nirs.modules.FixNaNs();
-% jobs         = nirs.modules.OpticalDensity(jobs);
-% jobs         = nirs.modules.Resample(jobs);
-% jobs.Fs      = 1; % resample
-% jobs         = nirs.modules.BeerLambertLaw(jobs);
-% Hb = jobs.run(r);
-% Hb(1).draw
-% 
-% %% Pre-processing & First-level analysis
-% jobs         = nirs.modules.AddAuxRegressors();
+% Loop through each subject's raw data
+for i = 1:length(raw)
+    
+    % --- CRITICAL FIX: CLEAR EXISTING STIMULUS DICTIONARY ---
+    % The raw data loading function (nirs.io.loadDirectory) often inserts 
+    % raw numeric triggers. We must clear these out before inserting the 
+    % clean, named conditions from AllStims.
+    % raw(i).stimulus = nirs.core.Dictionary; 
+    % raw(i).stimulus = containers.Map;
+    raw(i).stimulus = Dictionary;
+    % --------------------------------------------------------
+    
+    % Access the cell array of stimulus structs for the current subject
+    current_stims = AllStims{i};
+    
+    % Loop through all 6 stimulus events (2 Baselines + 4 Trials)
+    for j = 1:length(current_stims) 
+        
+        % Create a new stimulus event object for the NIRS Toolbox
+        s = nirs.design.StimulusEvents;
+        
+        % Check if the stimulus data is a struct and not empty
+        stim_data = current_stims{j};
+        if isstruct(stim_data)
+            
+            % Populate the stimulus event object 's' with the data you created
+            s.onset = stim_data.onsets;
+            s.dur = stim_data.durations;
+            
+            % --- FINAL NAME SANITIZATION CHECK ---
+            temp_name = stim_data.names;
+            
+            % Sanitize any numeric name, just in case (though AllStims should be clean)
+            if isstrprop(char(temp_name(1)), 'digit')
+                 s.name = ['Condition_' temp_name];
+                 warning('Sanitized numeric name in AllStims for subject %d, originally: %s', i, temp_name);
+            else
+                 s.name = temp_name; 
+            end
+            % ---------------------------------------
+            
+            % Force amplitude to a vector of ones (addressing the secondary concern)
+            if ~isempty(s.onset)
+                s.amp = ones(size(s.onset)); 
+            else
+                s.amp = 1;
+            end
+            
+            % IMPORTANT: Insert the stimulus object into the raw data's stimulus dictionary
+            raw(i).stimulus(s.name) = s; 
+            
+            clear s % Clear the temp variable before the next iteration
+        else
+            warning('Subject %d, Stimulus %d: Expected struct, but found unexpected type. Skipping.', i, j);
+        end
+    end
+    
+    % Optional: Add a check to ensure the stimulus field was populated
+    if length(raw(i).stimulus.keys) ~= 6
+        warning('Subject %d: Expected 6 stimuli, found %d after insertion.', i, length(raw(i).stimulus.keys));
+    end
+end
+
+% Create a table of the stimulus designs across all subjects for validation
+Stim_Table = nirs.createStimulusTable(raw); 
+% Display the first few rows of the table to confirm the data looks correct
+disp('*** Stimulus Table Head: ***');
+disp(head(Stim_Table));
+
+%% Specify short-seperation channels
+for i = 1:length(raw) % <-- CORRECTED: Use 'raw' instead of the undefined 'r'
+    probe = raw(i).probe;
+    probe.link.ShortSeperation = zeros(height(probe.link),1);
+    
+    for j = 1:height(probe.link) % <-- CORRECTED: Use height(probe.link) for links
+        if probe.link.detector(j) > 28
+            probe.link.ShortSeperation(j) = 1;
+        end
+        raw(i).probe = probe;
+    end
+end
+disp('*** SS Channels flagged on RAW data. ***');
+
+%% Conversions
+jobs         = nirs.modules.FixNaNs();
+jobs         = nirs.modules.OpticalDensity(jobs);
+jobs         = nirs.modules.Resample(jobs);
+jobs.Fs      = 1; % resample
+jobs         = nirs.modules.BeerLambertLaw(jobs);
+Hb = jobs.run(raw);
+Hb(1).draw
+
+%% Pre-processing & First-level analysis
+jobs         = nirs.modules.AddAuxRegressors();
 % jobs.label   = ('aux');
-% jobs         =nirs.modules.GLM(jobs);
-% jobs.type    = 'AR-IRLS';
-% jobs.AddShortSepRegressors = true;
-% jobs         = nirs.modules.ExportData(jobs);
-% jobs.Output  ='SubjStats';
-% jobs.run(Hb)
-% save('Hb_Final','SubjStats')
-% 
-% %% Second-level analysis
-% j = nirs.modules.MixedEffects();
-% j.formula = 'beta ~ -1 + cond + (1|Subject)'; %random effects
-% j.dummyCoding = 'full';
-% Group = j.run(SubjStats);
-% 
-% % (contrasts)
-% Intrinsic = Group.ttest([0 0 1 -1]);
-% Extrinsic = Group.ttest([0 1 0 -1]);
+jobs.label = {'aux'};
+jobs         =nirs.modules.GLM(jobs);
+jobs.type    = 'AR-IRLS';
+jobs.AddShortSepRegressors = true;
+jobs         = nirs.modules.ExportData(jobs);
+jobs.Output  ='SubjStats';
+jobs.run(Hb)
+save('Hb_Final','SubjStats')
+
+%% Second-level analysis
+j = nirs.modules.MixedEffects();
+j.formula = 'beta ~ -1 + cond + (1|Subject)'; %random effects
+j.dummyCoding = 'full';
+Group = j.run(SubjStats);
+
+%% (contrasts)
+% LG_Train; HG_Train; LG_Test; HG_Test
+% White board
+
+% HG_Train; HG_Baseline; HG_Test; LG_Train; LG_Baseline; LG_Test
+c1 = Group.ttest([1 0 0 0 0 0]);
+c2 = Group.ttest([0 0 1 0 0 1]);
+c3 = Group.ttest([1 0 0 -1 0 0]);
+c4 = Group.ttest([0 0 1 0 0 1]);
+c5 = Group.ttest([1 0 -1 -1 0 -1]);
