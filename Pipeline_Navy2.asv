@@ -3,97 +3,37 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % This is the main analysis script for fNIRS neuroimaging data analysis.
 % 2024 - Institute of Cognitive Science, CU-Boulder - James Crum  
-% 2025 - Modifications Jalynn Nicoly
+% 2025 - Institute of Cognitive Science, CU-Boulder - Jalynn Nicoly
 
-%% Add NIRS Toolbox to the Matlab path
-clear, clc 
-addpath(genpath('C:\Program Files\MATLAB\R2023a\toolbox\nirs-toolbox-master'));
+%% Load Folders & Data
 
-%% Initialize data directory
-% Directory = 'C:\Users\Jalynn\Desktop\fNIRS_Analysis_ONR2_Germane\fNIRS';
+% Clears the terminal
+clear, clc
+
+% Add NIRS Toolbox to the Matlab path
+addpath(genpath('C:\Users\Jalynn\Documents\GitHub\nirs-toolbox'))
+
+% Initialize data directory - equals a string of the path name
 Directory = 'C:\Users\Jalynn\Documents\GitHub\Universal_fNIRS_Analyzer\fNIRS';
 
 % Load raw fNIRS intensities
-rawDir = dir(Directory);
 raw = nirs.io.loadDirectory(Directory, {'Subject'});
 
 % Load conditions
 conditions = readtable('Conditions.csv');
 
-%% Extract, organize, & insert stimulus designs (LSL Files)
-% Find all .tri files recursively
-triFiles = dir(fullfile(Directory, '**', '*.tri'));
-% Initialize struct to group by participant/run
-trigs_by_ptp = struct();
-for i = 1:numel(triFiles)
-    % --- Extract participant folder (first folder under Old_fNIRS) ---
-    relPath = strrep(triFiles(i).folder, [Directory filesep], '');  % remove base path
-    parts = split(relPath, filesep);                                 % split remaining path
-    ptpFolderName = parts{1};                                        % first folder = participant
-    
-    % --- Extract participant ID (P001, P002, etc.) ---
-    ptpID = extractBefore(ptpFolderName, ' ');  % take part before first space
-    
-    % Load .tri file
-    triPath = fullfile(triFiles(i).folder, triFiles(i).name);
-    triData = readmatrix(triPath, 'FileType', 'text', 'Delimiter', ';');
-    % Store column 3 if it exists
-    trigValues = [];
-    if size(triData,2) >= 3
-        trigValues = triData(:,3);
-    end
-    % Insert into struct under participant/run
-    if isfield(trigs_by_ptp, ptpID)
-        error('Participant ID %s already exists in trigs_by_ptp!', ptpID);
-        % trigs_by_ptp.(ptpID){end+1} = trigValues; % append to cell array
-    else
-        trigs_by_ptp.(ptpID) = {trigValues};       % initialize cell array
-    end
-end
+%% Convert condition codes to string labels (Low & High Germane)
 
-%% Remove particiants with insufficient timestamps across vars
-a = 1;
-idx = [];
-
-ptpNames = fieldnames(trigs_by_ptp);
-for i = 1:numel(ptpNames)
-    cellVal = trigs_by_ptp.(ptpNames{i});  % should be a 1x1 cell containing the vector
-    if ~iscell(cellVal) || isempty(cellVal) || isempty(cellVal{1})
-        cellSize = 0;
-    else
-        cellSize = size(cellVal{1},1);
-    end
-
-    if cellSize < 10
-        idx(a) = i;
-        a = a + 1;
-    end
-end
-
-% remove collected participants (if any)
-if ~isempty(idx)
-    error(['Error: The following participants have fewer than 10 triggers: ' ...
-            num2str(idx)]);
-
-    % % Which ptps to remove - Those with less than 10 triggers
-    % namesToRemove = ptpNames(idx);
-    % 
-    % % Remove ptps from trigger struct
-    % trigs_by_ptp = rmfield(trigs_by_ptp, namesToRemove);
-    % 
-    % % Remove same ptps from raw
-    % raw(idx) = [];
-    % 
-    % % rms same ptps from conditions dataset
-    % conditions(idx,:) = [];
-end
-
-%% Convert condition codes to string labels
-% Converts a table to a cell matrix
+% Converts the conditions table to a cell matrix
 conditions = table2cell(conditions);
 
+% For each row in conditions
 for i = 1:size(conditions, 1)
+
+    % For only cols 2 and 3
     for j = 2:3
+
+        % Rename 1 to LG and 2 to HG (Low/High Germane)
         if conditions{i,j} == 1
             conditions{i,j} = 'LG';
         elseif conditions{i,j} == 2
@@ -102,24 +42,27 @@ for i = 1:size(conditions, 1)
     end
 end
 
-%% Extract, organize, & insert stimulus designs (LSL Files)
-% Find all .tri files recursively
+%% Load LSL.tri files into a struct (Each ptp has two fields - Timestamps and LSL Trigger Values)
+
+% Find all .tri files in the base directory
 triFiles = dir(fullfile(Directory, '**', '*.tri'));
-% Initialize struct to group by participant/run
-trigs_by_ptp = struct();
 
+% Initialize a struct to group event data (timestamps and triggers) by participant
+eventData_by_ptp = struct();
+
+% For each of the tri files...
 for i = 1:numel(triFiles)
-    % --- Extract participant ID (P001, P002, etc.) ---
-    relPath = strrep(triFiles(i).folder, [Directory filesep], '');  % remove base path
-    parts = split(relPath, filesep);                                 % split remaining path
-    ptpFolderName = parts{1};                                        % first folder = participant
-    ptpID = extractBefore(ptpFolderName, ' ');  % take part before first space
 
-    % Load .tri file
+    % Extract ptp ID (P001, P002, etc.) by the corresponding file name
+    relPath = strrep(triFiles(i).folder, [Directory filesep], ''); % remove base path (directory)
+    parts = split(relPath, filesep); % split the remaining path
+    ptpFolderName = parts{1}; % first folder = ptp ID
+    ptpID = extractBefore(ptpFolderName, ' '); % take the part before first space
+
+    % Load the current .tri file
     triPath = fullfile(triFiles(i).folder, triFiles(i).name);
 
-    % --- CORRECTION: Use readtable to preserve string columns ---
-    % Read the file as a table, treating the delimiter correctly
+    % Read the file as a table using the ';' delim
     T = readtable(triPath, 'FileType', 'text', 'Delimiter', ';', 'ReadVariableNames', false);
 
     % Convert the table to a cell array for easy column extraction
@@ -129,156 +72,206 @@ for i = 1:numel(triFiles)
     triTimesSec = [];
     trigValues = [];
 
-    % Process if we have enough columns (at least timestamp and trigger code)
+    % Need all three columns (PID; timestamp; trigger value)
     if size(triData,2) >= 3
-        % Extract the first column (Timestamps) as a cell array of strings
-        tsColumn_Cell = triData(:, 1);
 
-        % Convert the cell array of strings to a string array
-        tsColumn = string(tsColumn_Cell);
+        % Timestamps
+        tsColumn_Cell = triData(:, 1); % Extract the first col of timestamps as strings
+        tsColumn = string(tsColumn_Cell); % Convert cell array to array
+        tsColumn = extractBefore(tsColumn, 24); % Convert microseconds to ms
+        triTimestamps = datetime(tsColumn, 'InputFormat', 'yyyy-MM-dd''T''HH:mm:ss.SSS'); % Convert to datetime obj
+        triTimesSec = seconds(triTimestamps - triTimestamps(1)); % Calculate relative time in s sinces first event
 
-        % Truncate microseconds to milliseconds (LSL standard)
-        tsColumn = extractBefore(tsColumn, 24); % keeps yyyy-MM-ddTHH:mm:ss.SSS
-
-        % Convert to datetime object
-        triTimestamps = datetime(tsColumn, 'InputFormat', 'yyyy-MM-dd''T''HH:mm:ss.SSS');
-
-        % Calculate relative times in seconds from the first event's time
-        triTimesSec = seconds(triTimestamps - triTimestamps(1));
-
-        % Trigger codes (third column) - ensure these are converted to numbers
-        trigValues = cell2mat(triData(:, 3)); 
+        % Trigger Values
+        trigValues = cell2mat(triData(:, 3));  % Extract the third col of trigger values
     end
 
-    % Store the processed data (relative times and trigger codes)
-    if isfield(trigs_by_ptp, ptpID)
-        error('Participant ID %s already exists in trigs_by_ptp!', ptpID);
+    % If the PID already exists...
+    if isfield(eventData_by_ptp, ptpID)
+        % Throw an error
+        error('Participant ID %s already exists in eventData_by_ptp!', ptpID);
     else
-        % Store a struct containing both the time vector and trigger codes
-        trigs_by_ptp.(ptpID) = struct('Times', {triTimesSec}, 'Triggers', {trigValues}); 
+        % Else - Store the data in the struct containing both the time vector and trigger codes
+        eventData_by_ptp.(ptpID) = struct('Times', {triTimesSec}, 'Triggers', {trigValues}); 
     end
 end
 
 %% Insert stimulus designs
+
+% nRaw is equivalent to the number of ptps/subjects
 nRaw = length(raw);
-% Create a cell array to store the full structure from trigs_by_ptp
-ptpNames = fieldnames(trigs_by_ptp);
-data_trigs = cell(nRaw,1); 
+
+% Collect only the ptp ID, not their data
+ptpNames = fieldnames(eventData_by_ptp);
+
+% A struct for each ptp with their data
+data_trigs = cell(nRaw,1);
+
 for i = 1:min(nRaw,numel(ptpNames))
-    % FIX: Assuming data_trigs{i} holds a struct array, index the first element
-    data_trigs{i} = trigs_by_ptp.(ptpNames{i});
+
+    % Index the first element - Should look familiar from previous for loop
+    data_trigs{i} = eventData_by_ptp.(ptpNames{i});
 end
 
+% Initialize a struct for each ptp and their data - Need for raw
 AllStims = cell(nRaw,1);
+
+% Initialize an array for the ptps to be excluded - really to throw an error
 exclude = [];
-a=1;
+
+% Similar to i - set the index counter
+a = 1;
 
 % Loop over each subject saved in raw
-for i = 1:nRaw    
+for i = 1:nRaw
+
+    % The data of the current ptp
     tempStruct  = data_trigs{i};
-    % FIX: Accessing struct fields with array indexing (1)
+
+    % Check if it is a cell of the data
     if iscell(tempStruct)
-         % If it somehow retrieved a cell holding the struct (as a fallback)
+
+         % If it is somehow a cell, set the var as the struct it is holding
          tempStruct = tempStruct{1};
     end
 
-    triTimesSec = tempStruct(1).Times;      % The relative time vector in seconds
-    trigVec     = tempStruct(1).Triggers;   % The trigger code vector
+    % Pull the relative time vector that was filled earlier
+    triTimesSec = tempStruct(1).Times;
 
-    % Check for sufficient trigger points (must be >= 10: 4 trials * 2 + 2 baselines * 1)
+    % Similarly, retrieve the trigger value vector
+    trigVec = tempStruct(1).Triggers;
+
+    % Check for sufficient trigger values (must be >= 10)
     if isempty(trigVec) || numel(trigVec) < 10 || isempty(triTimesSec)
+
+        % If not enough trigger values - add that ptp to "exclude"
         exclude(a) = i; a = a+1; continue
     end
 
-    % Secondary Exclusion Check (Raw NIRS Data Integrity)
+    % Check if there are timestamps in the raw data
     if isempty(raw(i).time) || ~isnumeric(raw(i).time)
+
+        % If not - add that ptp to "exclude"
         exclude(a) = i; a = a+1; continue
     end
 
-    % 1. Separate Baseline Markers and Trial Triggers
+    %%%%%%% 1) Separate Baseline and Trial Triggers %%%%%%%
     
-    % The baseline *end* markers are triggers 31 and 32
+    % The baseline end markers are triggers 31 and 32
+    % reates a vector of 0s and 1s based on 31/32
     is_baseline_marker = (trigVec == 31) | (trigVec == 32); 
     
     % Baseline marker times (end of the 90s baseline period) and values
+    % Only draws the timestamps where the vector has 1s - baseline times
     baseline_marker_times = triTimesSec(is_baseline_marker);
-    baseline_codes        = trigVec(is_baseline_marker);
+
+    % Similarly, only draws the triggers where the vector has 1s
+    baseline_codes = trigVec(is_baseline_marker);
     
     % Experimental trial trigger times and values
+    % Is the reverse of is baseline markers
     is_trial = ~is_baseline_marker;
+
+    % Trial times - draws timestamps where the vector has 1s
     trial_onsets_times = triTimesSec(is_trial);
-    trial_codes        = trigVec(is_trial);
+
+    % Trial trigger values - draws the triggers where vector has 1s
+    trial_codes = trigVec(is_trial);
 
     % Sanity check: Should have 2 baseline markers and 8 trial triggers
     if length(baseline_marker_times) ~= 2 || length(trial_onsets_times) ~= 8
+
+        % Throw a warning if else
         warning('Participant %d: Expected 2 baseline and 8 trial triggers, found %d and %d.', ...
             i, length(baseline_marker_times), length(trial_onsets_times));
+
+        % And add ptp to exclude list
         exclude(a) = i; a = a+1; continue;
     end
-    
-    % 2. Extract Trial Onsets and Durations 
-    % The experimental trials are still paired (odd = start, even = end)
-    starts = 1:2:length(trial_codes);
-    ends   = 2:2:length(trial_codes);
 
+    %%%%%%% 2) Extract Trial Onsets and Durations %%%%%%%
+
+    % The experimental trials are paired (odds = start, evens = end)
+    % Trial codes only contain trial triggers
+    starts = 1:2:length(trial_codes);
+    ends = 2:2:length(trial_codes);
+    
     % Onsets for the 4 experimental trials 
-    trial_onsets    = trial_onsets_times(starts);
+    trial_onsets = trial_onsets_times(starts);
     trial_end_times = trial_onsets_times(ends); 
     trial_durations = trial_end_times - trial_onsets;
+    
+    %%%%%%% 3) Define Condition Labels %%%%%%%
 
-    % 3. Define Condition Labels
-    % C1 is conditions{i,2} (e.g., 'LG'), C2 is conditions{i,3} (e.g., 'HG')
-    cond_name_1 = conditions{i,2};
-    cond_name_2 = conditions{i,3};
+    % The 'trial_codes' vector contains 8 trigger values (Start/End for 4 trials)
+    % Only the START codes are needed to define the condition for each trial (41/42)
+    trial_start_codes = trial_codes(starts);
+    
+    % Initialize the base names based on the 4 trial start codes ('LG', 'LG', 'HG', 'HG')
+    base_names = cell(1, 4);
 
-    % Use these base names to create the explicit stimulus names
-    % Order: C1 Train, C1 Test, C2 Train, C2 Test
-    base_names = { cond_name_1, cond_name_1, cond_name_2, cond_name_2 };
+    % For each start code, determine if the cond is low or high
+    for j = 1:4
+        code = trial_start_codes(j);
+        if code == 41 
+            base_names{j} = 'LG';
+        elseif code == 42
+            base_names{j} = 'HG';
+        else
 
-    % Need 6 total events: 4 trials + 2 baselines
-    newStims = cell(6,1); 
-
-    % 4. Calculate Baselines (90s BEFORE the marker) and Assign to Conditions
-
-    % Determine which name corresponds to which code for the baseline
-    if strcmp(cond_name_1, 'LG')
-        lg_cond_name = cond_name_1;
-        hg_cond_name = cond_name_2;
-    else 
-        lg_cond_name = cond_name_2;
-        hg_cond_name = cond_name_1;
+            % Throw an error if an unexpected "start" code is found
+            error('Participant %d, Trial %d: Unexpected trial start code found: %d. Expected 41 or 42.', i, j, code);
+        end
     end
+    
+    % Stick to the '41'->'LG' and '42'->'HG' mapping
+    lg_cond_name = 'LG';
+    hg_cond_name = 'HG';
+
+    % There is a need for 6 total events: 4 trials + 2 baselines
+    newStims = cell(6,1); 
+    
+    %%%%%%% 4) Calculate Baselines (90s BEFORE the marker) and Assign to Conditions %%%%%%%
     
     % Create the Baseline events structure
     baseline_events = struct('names', {}, 'onsets', {}, 'durations', {}, 'amp', {}, 'regressor_no_interest', {});
     
     for k = 1:2
-        code = baseline_codes(k);
+        code = baseline_codes(k); % 31 or 32
         marker_time = baseline_marker_times(k);
         
-        % CRUCIAL CHANGE: Baseline starts 90 seconds BEFORE the marker time
+        % Fixed at 90s
         baseline_duration = 90;
         baseline_onset = marker_time - baseline_duration; 
         
-        if code == 31 % LG Condition Baseline
-            b_name = [lg_cond_name '_Baseline'];
-        elseif code == 32 % HG Condition Baseline
-            b_name = [hg_cond_name '_Baseline'];
+        % Assign names based on baseline code (31/32)
+        if code == 31 
+            b_name = [lg_cond_name '_Baseline']; % 31 is LG Baseline
+        elseif code == 32
+            b_name = [hg_cond_name '_Baseline']; % 32 is HG Baseline
         else
             error('Unexpected baseline code: %d', code);
         end
         
-        baseline_events(k).names     = b_name; 
-        baseline_events(k).onsets    = baseline_onset;
-        baseline_events(k).durations = baseline_duration; % Fixed 90s duration
-        baseline_events(k).amp       = 1;
+        baseline_events(k).names = b_name; 
+        baseline_events(k).onsets = baseline_onset;
+        baseline_events(k).durations = baseline_duration;
+        baseline_events(k).amp = 1;
         baseline_events(k).regressor_no_interest = 0;
     end
     
-    % 5. Create Trial Events
+    %%%%%%% 5) Create Trial Events %%%%%%%
+
+    % Onset and duration of each trial
     trial_events = cell(4, 1);
+
     for j = 1:4
+        % Determine label: 1st and 3rd trial in the sequence are Train, 2nd and 4th are Test.
+        % NOTE: If your sequence is always T1-Test, T2-Train, T3-Test, T4-Train, you'll need to change this logic.
         if j==1 || j==3; label='Train'; else; label='Test'; end
+        
+        % The base_names{j} is now guaranteed to be 'LG' or 'HG' based on the
+        % trial's START code (41 or 42) from step 3.
         trial_events{j}.names = [base_names{j} '_' label]; 
         
         trial_events{j}.onsets    = trial_onsets(j);
@@ -287,7 +280,7 @@ for i = 1:nRaw
         trial_events{j}.regressor_no_interest = 0;
     end
     
-    % 6. Combine and Sort All 6 Events Chronologically
+    %%%%%%% 6) Combine and Sort All 6 Events Chronologically %%%%%%%
 
     % Convert the 1x2 baseline struct array into a 2x1 cell array of structs
     baseline_events_cell = num2cell(baseline_events(:)); 
@@ -307,39 +300,27 @@ for i = 1:nRaw
     AllStims{i} = newStims;
 end
 
-% ---- Throw error if any exclusions occurred ----
-exclude = unique(exclude);
-exclude = exclude(exclude > 0);
-if ~isempty(exclude)
-    fprintf('--- DEBUG: exclusion details ---\n');
-    for k = exclude
-         trig_status = ~isempty(data_trigs{k}(1).Triggers) && numel(data_trigs{k}(1).Triggers) >= 10;
-         time_status = ~isempty(raw(k).time) && isnumeric(raw(k).time);
+%% ---- Throw error if any exclusions occurred ----
 
-         if ~trig_status
-             msg = 'Reason: .tri file less than 10 triggers OR timestamp error.';
-         elseif ~time_status
-             msg = 'Reason: raw(i).time is empty or not numeric.';
-         else
-             msg = 'Reason: Unknown structural integrity issue.';
-         end
-         fprintf('Participant %d excluded. %s\n', k, msg);
-    end
+% Remove any duplicates
+exclude = unique(exclude);
+
+% Remove any invalid indices (=< 0)
+exclude = exclude(exclude > 0);
+
+% If exclude is not empty - Throw an error about problematic ptp(s)
+if ~isempty(exclude)
     error(['Participants missing data: ' num2str(exclude)]);
 end
 
 %% Working with nirs R
+
 % Loop through each subject's raw data
 for i = 1:length(raw)
     
-    % --- CRITICAL FIX: CLEAR EXISTING STIMULUS DICTIONARY ---
-    % The raw data loading function (nirs.io.loadDirectory) often inserts 
-    % raw numeric triggers. We must clear these out before inserting the 
-    % clean, named conditions from AllStims.
-    % raw(i).stimulus = nirs.core.Dictionary; 
-    % raw(i).stimulus = containers.Map;
+    % Clear our previous stimulus - helps avoid raw numeric triggers
+    % Does get replaced later
     raw(i).stimulus = Dictionary;
-    % --------------------------------------------------------
     
     % Access the cell array of stimulus structs for the current subject
     current_stims = AllStims{i};
@@ -354,95 +335,104 @@ for i = 1:length(raw)
         stim_data = current_stims{j};
         if isstruct(stim_data)
             
-            % Populate the stimulus event object 's' with the data you created
+            % Populate the stimulus event object 's' with the data
             s.onset = stim_data.onsets;
             s.dur = stim_data.durations;
             
-            % --- FINAL NAME SANITIZATION CHECK ---
+            % Sanity Check (Names were starting with #s previously - not valid for MATLAB)
             temp_name = stim_data.names;
-            
-            % Sanitize any numeric name, just in case (though AllStims should be clean)
             if isstrprop(char(temp_name(1)), 'digit')
                  s.name = ['Condition_' temp_name];
                  warning('Sanitized numeric name in AllStims for subject %d, originally: %s', i, temp_name);
             else
                  s.name = temp_name; 
             end
-            % ---------------------------------------
             
-            % Force amplitude to a vector of ones (addressing the secondary concern)
+            % Force amplitude to a vector of ones - Fix issues with jobs.run(Hb)
             if ~isempty(s.onset)
                 s.amp = ones(size(s.onset)); 
             else
                 s.amp = 1;
             end
             
-            % IMPORTANT: Insert the stimulus object into the raw data's stimulus dictionary
+            % Insert the stimulus obj into the raw data's stimulus dictionary
             raw(i).stimulus(s.name) = s; 
             
-            clear s % Clear the temp variable before the next iteration
+            % Clear the temp variable before the next iteration
+            clear s
         else
+            % Else - Throw warning if stimulus data is not a struct or is empty
             warning('Subject %d, Stimulus %d: Expected struct, but found unexpected type. Skipping.', i, j);
         end
     end
     
-    % Optional: Add a check to ensure the stimulus field was populated
+    % Sanity Check: Ensure the stimulus field was populated
     if length(raw(i).stimulus.keys) ~= 6
+
+        % Else - Throw a warning
         warning('Subject %d: Expected 6 stimuli, found %d after insertion.', i, length(raw(i).stimulus.keys));
     end
 end
 
 % Create a table of the stimulus designs across all subjects for validation
 Stim_Table = nirs.createStimulusTable(raw); 
+
 % Display the first few rows of the table to confirm the data looks correct
 disp('*** Stimulus Table Head: ***');
 disp(head(Stim_Table));
 
 %% Specify short-seperation channels
-for i = 1:length(raw) % <-- CORRECTED: Use 'raw' instead of the undefined 'r'
+
+% Used raw instead of the previously defined r (I did not make a copy of raw)
+for i = 1:length(raw)
     probe = raw(i).probe;
     probe.link.ShortSeperation = zeros(height(probe.link),1);
-    
-    for j = 1:height(probe.link) % <-- CORRECTED: Use height(probe.link) for links
+    for j = 1:height(probe.link)
         if probe.link.detector(j) > 28
             probe.link.ShortSeperation(j) = 1;
         end
         raw(i).probe = probe;
     end
 end
+
 disp('*** SS Channels flagged on RAW data. ***');
 
 %% Conversions
+
 jobs         = nirs.modules.FixNaNs();
 jobs         = nirs.modules.OpticalDensity(jobs);
 jobs         = nirs.modules.Resample(jobs);
-jobs.Fs      = 1; % resample
+jobs.Fs      = 1;
 jobs         = nirs.modules.BeerLambertLaw(jobs);
 Hb = jobs.run(raw);
 Hb(1).draw
 
 %% Pre-processing & First-level analysis
-jobs         = nirs.modules.AddAuxRegressors();
-% jobs.label   = ('aux');
-jobs.label = {'aux}'};
-jobs         =nirs.modules.GLM(jobs);
-jobs.type    = 'AR-IRLS';
+
+jobs = nirs.modules.AddAuxRegressors();
+jobs.label = {'aux'};
+jobs =nirs.modules.GLM(jobs);
+jobs.type = 'AR-IRLS';
 jobs.AddShortSepRegressors = true;
-jobs         = nirs.modules.ExportData(jobs);
-jobs.Output  ='SubjStats';
+jobs = nirs.modules.ExportData(jobs);
+jobs.Output ='SubjStats';
 jobs.run(Hb)
 save('Hb_Final','SubjStats')
 
 %% Second-level analysis
+
 j = nirs.modules.MixedEffects();
 j.formula = 'beta ~ -1 + cond + (1|Subject)'; %random effects
 j.dummyCoding = 'full';
 Group = j.run(SubjStats);
 
-% (contrasts)
-% LG_Train; HG_Train; LG_Test; HG_Test
-c1 = Group.ttest([ 0 1 -1]);
-c2 = Group.ttest([0 1 0 -1]);
-c3 = Group.ttest([0 0 1 -1]);
-c4 = Group.ttest([0 1 0 -1]);
-c5 = Group.ttest([0 0 1 -1]);
+%% Contrasts
+
+% The contrasts are built based on the whiteboard drawing
+% Additional cols include the baseline conditions
+% HG_Train; HG_Baseline; HG_Test; LG_Train; LG_Baseline; LG_Test
+c1 = Group.ttest([1 0 0 0 0 0]);
+c2 = Group.ttest([0 0 1 0 0 1]);
+c3 = Group.ttest([1 0 0 -1 0 0]);
+c4 = Group.ttest([0 0 1 0 0 -1]);
+c5 = Group.ttest([1 0 -1 -1 0 -1]);
